@@ -1,7 +1,8 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi.Models;
 using MinimalApiWebApi.Data;
 using MinimalApiWebApi.Models;
 using MiniValidation;
@@ -10,18 +11,58 @@ using NetDevPack.Identity.Model;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
-
-builder.Services.AddDbContext<MinimalContextDb>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-
 builder.Services.AddIdentityEntityFrameworkContextConfiguration(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"),
     b => b.MigrationsAssembly("MinimalApiWebApi")));
 
+builder.Services.AddDbContext<MinimalContextDb>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
 builder.Services.AddIdentityConfiguration();
 builder.Services.AddJwtConfiguration(builder.Configuration, "AppSettings");
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("ExcluirFornecedor",
+        policy => policy.RequireClaim("ExcluirFornecedor"));
+});
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Minimal API Sample",
+        Description = "Developed by Jean Michael - Owner @ Connory Software",
+        Contact = new OpenApiContact { Name = "Jean Michael", Email = "michaelrhcp@gmail.com" },
+        License = new OpenApiLicense { Name = "MIT", Url = new Uri("https://opensource.org/licenses/MIT") }
+    });
+
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "Insira o token JWT desta maneira: Bearer {seu token}",
+        Name = "Authorization",
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey
+    });
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            new string[] {}
+        }
+    });
+});
 
 var app = builder.Build();
 
@@ -31,16 +72,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-
-//app.UseAuthentication();
-
-//app.UseAuthorization();
-
-//app.UseAuthConfiguration();
+app.UseAuthConfiguration();
 
 app.UseHttpsRedirection();
 
-app.MapPost("/registro", async (SignInManager<IdentityUser> singInManager, UserManager<IdentityUser> userManager,
+app.MapPost("/registro", [AllowAnonymous] async (SignInManager<IdentityUser> singInManager, UserManager<IdentityUser> userManager,
                                 IOptions<AppJwtSettings> AppJwtSettings, RegisterUser registerUser) =>
 {
     if (registerUser == null)
@@ -78,7 +114,7 @@ app.MapPost("/registro", async (SignInManager<IdentityUser> singInManager, UserM
  .WithName("RegistroUsuario")
  .WithTags("Usuario");
 
-app.MapPost("/login", async (SignInManager<IdentityUser> singInManager, UserManager<IdentityUser> userManager,
+app.MapPost("/login", [AllowAnonymous] async (SignInManager<IdentityUser> singInManager, UserManager<IdentityUser> userManager,
                                 IOptions<AppJwtSettings> AppJwtSettings, LoginUser loginUser) =>
 {
     if (loginUser == null)
@@ -87,7 +123,7 @@ app.MapPost("/login", async (SignInManager<IdentityUser> singInManager, UserMana
     if (!MiniValidator.TryValidate(loginUser, out var errors))
         return Results.ValidationProblem(errors);
 
-    var result = await singInManager.PasswordSignInAsync(loginUser.Email, loginUser.Password, false, false);
+    var result = await singInManager.PasswordSignInAsync(loginUser.Email, loginUser.Password, false, true);
 
     if (result.IsLockedOut)
         return Results.BadRequest("Usuário Bolqueado");
@@ -112,12 +148,12 @@ app.MapPost("/login", async (SignInManager<IdentityUser> singInManager, UserMana
  .WithName("LoginUsuario")
  .WithTags("Usuario");
 
-app.MapGet("/fornecedor", async (MinimalContextDb context) =>
+app.MapGet("/fornecedor", [AllowAnonymous] async (MinimalContextDb context) =>
     await context.Fornecedores.ToListAsync())
     .WithName("GetFornecedor")
     .WithTags("Fornecedor");
 
-app.MapGet("/fornecedor/{id}", async (Guid id, MinimalContextDb context) =>
+app.MapGet("/fornecedor/{id}", [Authorize] async (Guid id, MinimalContextDb context) =>
     await context.Fornecedores.FindAsync(id)
         is Fornecedor fornecedor ? Results.Ok(fornecedor) : Results.NotFound())
     .Produces<Fornecedor>(StatusCodes.Status200OK)
@@ -125,7 +161,7 @@ app.MapGet("/fornecedor/{id}", async (Guid id, MinimalContextDb context) =>
     .WithName("GetFornecedorPorId")
     .WithTags("Fornecedor");
 
-app.MapPost("/fornecedor", async (MinimalContextDb context, Fornecedor fornecedor) =>
+app.MapPost("/fornecedor", [Authorize] async (MinimalContextDb context, Fornecedor fornecedor) =>
 {
     if (!MiniValidator.TryValidate(fornecedor, out var errors))
         return Results.ValidationProblem(errors);
@@ -144,7 +180,7 @@ app.MapPost("/fornecedor", async (MinimalContextDb context, Fornecedor fornecedo
  .WithName("PostFornecedor")
  .WithTags("Fornecedor");
 
-app.MapPut("/fornecedor/{id}", async (MinimalContextDb context, Guid id, Fornecedor fornecedor) =>
+app.MapPut("/fornecedor/{id}", [Authorize] async (MinimalContextDb context, Guid id, Fornecedor fornecedor) =>
 {
     var fornecedorBanco = await context.Fornecedores.AsNoTracking<Fornecedor>()
                                                     .FirstOrDefaultAsync(f => f.Id == id);
@@ -167,7 +203,7 @@ app.MapPut("/fornecedor/{id}", async (MinimalContextDb context, Guid id, Fornece
  .WithName("PutFornecedor")
  .WithTags("Fornecedor");
 
-app.MapDelete("/fornecedor/{id}", async (MinimalContextDb context, Guid id) =>
+app.MapDelete("/fornecedor/{id}", [Authorize] async (MinimalContextDb context, Guid id) =>
 {
     var fornecedor = await context.Fornecedores.FindAsync(id);
     if (fornecedor == null) return Results.NotFound();
@@ -182,6 +218,7 @@ app.MapDelete("/fornecedor/{id}", async (MinimalContextDb context, Guid id) =>
  .Produces(StatusCodes.Status400BadRequest)
  .Produces(StatusCodes.Status204NoContent)
  .Produces(StatusCodes.Status404NotFound)
+ .RequireAuthorization("ExcluirFornecedor")
  .WithName("DeleteFornecedor")
  .WithTags("Fornecedor");
 
